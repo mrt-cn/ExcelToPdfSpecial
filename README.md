@@ -40,4 +40,4 @@ python main.py
 
 ## 📩 İletişim  
 📧 **Geliştirici:** [Murat Can](https://github.com/mrt-cn)  
-🔗 **GitHub:** [ExcelToPDFFormatter](https://github.com/mrt-cn/ExcelToPDFFormatter)  
+🔗 **GitHub:** [ExcelToPDFFormatter](https://github.com/mrt-cn/ExcelToPdfSpecial)  
