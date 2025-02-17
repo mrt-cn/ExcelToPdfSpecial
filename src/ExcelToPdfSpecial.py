@@ -71,17 +71,22 @@ class PDFConverterApp:
         try:
             # Sayısal bir değer ise (Excel tarih serial formatı)
             if isinstance(value, (int, float)):
-                date = datetime.fromordinal(datetime(1900, 1, 1).toordinal()) + int(value) - 2
-                return date.strftime("%-d.%-m.%Y")
+                try:
+                    date = datetime.fromordinal(datetime(1900, 1, 1).toordinal() + int(value) - 2)
+                    return date.strftime("%-d.%-m.%Y")
+                except OverflowError:
+                    return str(value)  # Tarih dönüşümü mümkün değilse orijinal değer
             # String ise parse et
             elif isinstance(value, str):
-                # Tarih ve saat kısmını ayır
-                value = value.split()[0]
+                if  any(c in value for c in ['.', '/', '-']):
+                    return value    
+                # Tarih parse işlemi
                 parsed_date = parser.parse(value, dayfirst=True, fuzzy=True)
                 return parsed_date.strftime("%-d.%-m.%Y")
         except Exception as e:
-            print(f"Geçersiz tarih formatı: {value} - {str(e)}")
+            print(f"Tarih dönüşüm hatası - Değer: '{value}' | Tip: {type(value)} | Hata: {str(e)}")
         return str(value)  # Fallback olarak orijinal değeri string olarak döndür
+
 
     def process_file(self, excel_path, output_folder, stop_at_blank):
         """ Tek bir dosyayı işleyip PDF'e dönüştürür """
@@ -91,10 +96,13 @@ class PDFConverterApp:
 
             # İlk sütun adını al
             time_column = df.columns[0]
+            
+            # Tarih içeren sütunu belirle (2. sütun - index 1)
+            date_column = df.columns[1]
 
             # Tarih formatlarını normalize et
-            for col in df.columns:
-                df[col] = df[col].apply(self.normalize_date)
+            # Yalnızca 2. sütundaki tarihleri normalize et
+            df[date_column] = df[date_column].apply(self.normalize_date)
 
             # Saat formatlarını temizle
             def clean_time(value):
@@ -104,7 +112,7 @@ class PDFConverterApp:
                     elif len(value.split(":")) == 3:
                         return ":".join(value.split(":")[:2])
                 return value
-
+            
             df[time_column] = df[time_column].apply(clean_time)
 
             # Ondalık sayılarda iki hane koruma
