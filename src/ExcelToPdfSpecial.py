@@ -30,6 +30,13 @@ class PDFConverterApp:
         self.root.iconbitmap(self.resource_path('assets/favicon.ico'))
         logo_path = self.resource_path('assets/image.png')
         logo_image = Image.open(logo_path)
+        
+        # Logo boyutunu pencereye uygun şekilde ölçeklendir (max genişlik 280, max yükseklik 80)
+        max_w, max_h = 280, 80
+        w, h = logo_image.size
+        ratio = min(max_w / w, max_h / h)
+        logo_image = logo_image.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
+        
         logo_photo = ImageTk.PhotoImage(logo_image)
         logo_label = Label(self.root, image=logo_photo)
         logo_label.image = logo_photo
@@ -64,110 +71,216 @@ class PDFConverterApp:
         return os.path.join(base_path, relative_path)
 
 
+    def format_date_value(self, val):
+        if pd.isna(val) or val == "":
+            return ""
+        # If it's a datetime/Timestamp
+        if hasattr(val, 'day') and hasattr(val, 'month') and hasattr(val, 'year'):
+            return f"{val.day}.{val.month}.{val.year}"
+        
+        val_str = str(val).strip()
+        # If it contains time portion, remove it (e.g., '2025-03-27 00:00:00' -> '2025-03-27')
+        if " " in val_str:
+            val_str = val_str.split(" ")[0]
+            
+        try:
+            parsed = parser.parse(val_str, dayfirst=True, fuzzy=True)
+            return f"{parsed.day}.{parsed.month}.{parsed.year}"
+        except Exception:
+            return val_str
+
+    def format_time_value(self, val):
+        if pd.isna(val) or val == "":
+            return ""
+        # If it is a datetime.time or Timestamp/datetime
+        if hasattr(val, 'hour') and hasattr(val, 'minute') and hasattr(val, 'second'):
+            if hasattr(val, 'microsecond') and val.microsecond > 0:
+                ms_str = f"{val.microsecond // 100000:01d}" # one decimal digit
+                return f"{val.hour:02d}:{val.minute:02d}:{val.second:02d}.{ms_str}"
+            else:
+                return f"{val.hour:02d}:{val.minute:02d}:{val.second:02d}"
+                
+        val_str = str(val).strip()
+        # If it has date portion, remove it
+        if " " in val_str:
+            val_str = val_str.split(" ")[-1]
+            
+        parts = val_str.split(":")
+        if len(parts) == 3:
+            sec_parts = parts[2].split(".")
+            if len(sec_parts) == 2:
+                ms = sec_parts[1][:1] # keep 1 decimal place
+                return f"{parts[0]:0>2}:{parts[1]:0>2}:{sec_parts[0]:0>2}.{ms}"
+            else:
+                return f"{parts[0]:0>2}:{parts[1]:0>2}:{parts[2]:0>2}"
+        return val_str
+
     def normalize_date(self, value):
         """ Tarih formatını esnek şekilde normalize eder (d.M.yyyy) """
-        if pd.isna(value) or value == "":
-            return ""
-        try:
-            # Sayısal bir değer ise (Excel tarih serial formatı)
-            if isinstance(value, (int, float)):
-                try:
-                    date = datetime.fromordinal(datetime(1900, 1, 1).toordinal() + int(value) - 2)
-                    return date.strftime("%-d.%-m.%Y")
-                except OverflowError:
-                    return str(value)  # Tarih dönüşümü mümkün değilse orijinal değer
-            # String ise parse et
-            elif isinstance(value, str):
-                if  any(c in value for c in ['.', '/', '-']):
-                    return value    
-                # Tarih parse işlemi
-                parsed_date = parser.parse(value, dayfirst=True, fuzzy=True)
-                return parsed_date.strftime("%-d.%-m.%Y")
-        except Exception as e:
-            print(f"Tarih dönüşüm hatası - Değer: '{value}' | Tip: {type(value)} | Hata: {str(e)}")
-        return str(value)  # Fallback olarak orijinal değeri string olarak döndür
-
+        return self.format_date_value(value)
 
     def process_file(self, excel_path, output_folder, stop_at_blank):
-        """ Tek bir dosyayı işleyip PDF'e dönüştürür """
+        """ Tek bir dosyayı işleyip PDF'e dönüştürür. Hata durumunda Exception fırlatır. """
         font_path = self.resource_path('assets/DejaVuSans.ttf')
-        try:
-            df = pd.read_excel(excel_path, dtype=str)  # Tüm verileri string olarak oku
+        df = pd.read_excel(excel_path, dtype=object)  # Orijinal tipleri korumak için object olarak oku
 
-            # İlk sütun adını al
-            time_column = df.columns[0]
-            
-            # Tarih içeren sütunu belirle (2. sütun - index 1)
-            date_column = df.columns[1]
+        # Sütun tespiti (Tarih ve Saat kolonlarını bul)
+        date_column = None
+        time_column = None
+        
+        for col in df.columns:
+            col_str = str(col).lower()
+            if 'date' in col_str or 'tarih' in col_str:
+                date_column = col
+            elif 'time' in col_str or 'saat' in col_str:
+                time_column = col
+                
+        if date_column is None and len(df.columns) > 0:
+            date_column = df.columns[0]
+        if time_column is None and len(df.columns) > 1:
+            time_column = df.columns[1]
 
-            # Tarih formatlarını normalize et
-            # Yalnızca 2. sütundaki tarihleri normalize et
-            df[date_column] = df[date_column].apply(self.normalize_date)
+        # Tarih ve saat formatlarını temizle/normalize et
+        if date_column in df.columns:
+            df[date_column] = df[date_column].apply(self.format_date_value)
+        if time_column in df.columns:
+            df[time_column] = df[time_column].apply(self.format_time_value)
 
-            # Saat formatlarını temizle
-            def clean_time(value):
-                if isinstance(value, str):
-                    if len(value.split(":")) == 2:
-                        return value
-                    elif len(value.split(":")) == 3:
-                        return ":".join(value.split(":")[:2])
-                return value
-            
-            df[time_column] = df[time_column].apply(clean_time)
+        # Ondalık sayılarda iki hane koruma ve genel numerik formatlama (tarih/saat hariç)
+        for col in df.columns:
+            if col == date_column or col == time_column:
+                continue
+            def format_numeric(val):
+                if pd.isna(val) or val == "":
+                    return ""
+                try:
+                    val_float = float(val)
+                    if val_float.is_integer():
+                        return str(int(val_float))
+                    # Ondalık basamak 2'den fazlaysa 2 basamağa yuvarla
+                    val_str = str(val)
+                    if '.' in val_str:
+                        dec_part = val_str.split('.')[1]
+                        if len(dec_part) > 2:
+                            return f"{val_float:.2f}"
+                    return val_str
+                except (ValueError, TypeError):
+                    return str(val)
+            df[col] = df[col].apply(format_numeric)
 
-            # Ondalık sayılarda iki hane koruma
-            numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns
-            for col in numeric_columns:
-                df[col] = df[col].apply(lambda x: f"{x:.2f}" if pd.notnull(x) else "")
+        # Target temperature column tespiti (ORTAM1 veya 1. sensör)
+        temp_col = None
+        for col in ['ORTAM1', '1', 1]:
+            if col in df.columns:
+                temp_col = col
+                break
+        if temp_col is None and len(df.columns) > 2:
+            temp_col = df.columns[2]
 
-            if stop_at_blank:
-                for idx, row in df.iterrows():
-                    if pd.isnull(row['ORTAM1']):
-                        df = df[:idx]
+        if stop_at_blank:
+            if temp_col is None or temp_col not in df.columns:
+                raise KeyError(f"Sütun bulunamadı: 'ORTAM1' veya sensör sütunu ('Boş satırdan sonra dur' seçeneği bu sütunu gerektirir)")
+            for idx, row in df.iterrows():
+                val = row[temp_col]
+                if pd.isnull(val) or str(val).strip() == "":
+                    df = df[:idx]
+                    break
+
+        # Probe (sensör) kolonlarını belirle (Tarih ve Saat kolonları ve isimsiz kolonlar hariç)
+        probe_cols = [col for col in df.columns if col != date_column and col != time_column and not str(col).startswith("Unnamed:")]
+
+        # Sadece ve sadece 56 dereceye ulaşan son propun (tüm propların >= 56.0 olduğu ilk satır) satırını bul
+        target_row_idx = None
+        for i in range(len(df)):
+            all_reached = True
+            for col in probe_cols:
+                val = df[col].iloc[i]
+                try:
+                    val_float = float(val)
+                    if val_float < 56.0:
+                        all_reached = False
                         break
+                except (ValueError, TypeError):
+                    all_reached = False
+                    break
+            if all_reached and len(probe_cols) > 0:
+                target_row_idx = i
+                break
 
-            pdf = MyFPDF()
-            pdf.add_page()
-            pdf.add_font('DejaVu', '', font_path)
-            pdf.set_font('DejaVu', '', 8)
+        # "START OF EXPOSURE" fallback satırını bul
+        exposure_row_idx = None
+        for i in range(len(df)):
+            if any("START OF EXPOSURE" in str(df[item].iloc[i]) for item in df.columns):
+                exposure_row_idx = i
+                break
 
-            col_width = pdf.w / (df.shape[1] + 1)
-            row_height = pdf.font_size
+        # Dinamik yönlendirme (Sütun sayısı 8'den fazlaysa Yatay A4)
+        orientation = 'L' if df.shape[1] > 8 else 'P'
+        pdf = MyFPDF(orientation=orientation)
+        pdf.add_page()
+        pdf.add_font('DejaVu', '', font_path)
+        pdf.set_font('DejaVu', '', 8)
 
-            # Sütun başlıklarını yazdır
-            for header in df.columns:
-                if header.startswith("Unnamed:"):  # İsimsiz kolonları boş bırak
-                    header = ""
-                pdf.cell(col_width, row_height * 2, str(header), border=0)
-            pdf.ln(row_height * 2)
+        # Dinamik sütun genişliği hesaplama (overlapping engellemek için)
+        # Margins: sol 10mm, sağ 10mm. Yazdırılabilir alan: pdf.w - 20
+        printable_width = pdf.w - 20
+        raw_widths = []
+        for col in df.columns:
+            # Sütundaki tüm hücrelerin ve başlığın genişliğini bul
+            max_w = max([pdf.get_string_width(str(val)) for val in df[col]] + [pdf.get_string_width(str(col))])
+            raw_widths.append(max_w + 4)  # 4mm boşluk bırak
+            
+        total_raw_width = sum(raw_widths)
+        col_widths = [w * (printable_width / total_raw_width) for w in raw_widths]
+        row_height = pdf.font_size
 
-            # Veri satırlarını yazdır
-            for i in range(len(df)):
-                is_highlighted = False  # Sarı vurgulama için flag
+        # Sütun başlıklarını yazdır
+        for col_idx, header in enumerate(df.columns):
+            if str(header).startswith("Unnamed:"):  # İsimsiz kolonları boş bırak
+                header = ""
+            pdf.cell(col_widths[col_idx], row_height * 2, str(header), border=0)
+        pdf.ln(row_height * 2)
 
-                # Eğer "START OF EXPOSURE" varsa bütün satırı highlight et
-                if any("START OF EXPOSURE" in str(df[item].iloc[i]) for item in df.columns):
+        # Veri satırlarını yazdır
+        for i in range(len(df)):
+            is_highlighted = False  # Vurgulama flag'i
+
+            # Sadece hedef satırı veya fallback exposure satırını vurgula
+            if target_row_idx is not None:
+                if i == target_row_idx:
+                    is_highlighted = True
+            elif exposure_row_idx is not None:
+                if i == exposure_row_idx:
                     is_highlighted = True
 
-                for item in df.columns:
-                    value = df[item].iloc[i]
-                    if pd.isnull(value):
-                        value = ""
+            for col_idx, item in enumerate(df.columns):
+                value = df[item].iloc[i]
+                if pd.isnull(value):
+                    value = ""
 
-                    # Eğer satır highlight edilecekse, fill=True ile yazdır
-                    if is_highlighted:
-                        pdf.set_fill_color(255, 255, 0)  # Sarı arka plan
-                        pdf.cell(col_width, row_height * 2, str(value), border=0, fill=True)
-                    else:
-                        pdf.cell(col_width, row_height * 2, str(value), border=0)
+                # Eğer satır highlight edilecekse, fill=True ile yazdır (sarı arka plan)
+                if is_highlighted:
+                    pdf.set_fill_color(255, 255, 0)
+                    pdf.cell(col_widths[col_idx], row_height * 2, str(value), border=0, fill=True)
+                else:
+                    pdf.cell(col_widths[col_idx], row_height * 2, str(value), border=0)
 
-                pdf.ln(row_height * 2)  # Bir sonraki satıra geç
+            pdf.ln(row_height * 2)  # Bir sonraki satıra geç
 
-            output_file = f"{output_folder}/{os.path.basename(excel_path).replace('.xlsx', '.pdf')}"
-            pdf.output(output_file)
+        output_file = f"{output_folder}/{os.path.basename(excel_path).replace('.xlsx', '.pdf')}"
+        pdf.output(output_file)
 
+    def process_file_wrapper(self, excel_path, output_folder, stop_at_blank):
+        """ process_file metodunu çağırır ve hata durumlarını yakalar """
+        try:
+            self.process_file(excel_path, output_folder, stop_at_blank)
+            return True, ""
         except Exception as e:
-            print(f"Hata oluştu: {excel_path} - {e}")
+            import traceback
+            err_msg = str(e)
+            print(f"Hata oluştu ({excel_path}): {err_msg}")
+            traceback.print_exc()
+            return False, err_msg
 
     def batch_process(self, files, output_folder):
         """ Çoklu dosyaları işlemek için ThreadPoolExecutor kullanır """
@@ -176,17 +289,38 @@ class PDFConverterApp:
         self.root.update()
 
         completed_files = 0
+        failed_files = []
 
+        futures = []
         with ThreadPoolExecutor() as executor:
             for file_path in files:
-                executor.submit(self.process_file, file_path, output_folder, self.stop_at_blank_var.get())
-                completed_files += 1
-                self.progress['value'] = (completed_files / total_files) * 100
+                future = executor.submit(self.process_file_wrapper, file_path, output_folder, self.stop_at_blank_var.get())
+                futures.append((file_path, future))
+                
+            for idx, (file_path, future) in enumerate(futures):
+                success, err_msg = future.result()
+                if success:
+                    completed_files += 1
+                else:
+                    failed_files.append((file_path, err_msg))
+                
+                self.progress['value'] = ((idx + 1) / total_files) * 100
                 self.root.update()
 
         self.progress['value'] = 0
         self.root.update()
-        messagebox.showinfo("Başarılı", f"{total_files} dosya seçildi, {completed_files} dosya başarıyla dönüştürüldü.")
+
+        if failed_files:
+            error_details = "\n".join([f"- {os.path.basename(f)}: {err}" for f, err in failed_files])
+            messagebox.showerror(
+                "Dönüştürme Hatası", 
+                f"Bazı dosyalar dönüştürülemedi:\n\n{error_details}"
+            )
+        else:
+            messagebox.showinfo(
+                "Başarılı", 
+                f"{total_files} dosya başarıyla dönüştürüldü."
+            )
 
     def select_files(self):
         """ Dosyaları seç ve dosya sayısını güncelle """
