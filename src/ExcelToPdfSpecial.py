@@ -122,7 +122,22 @@ class PDFConverterApp:
     def process_file(self, excel_path, output_folder, stop_at_blank):
         """ Tek bir dosyayı işleyip PDF'e dönüştürür. Hata durumunda Exception fırlatır. """
         font_path = self.resource_path('assets/DejaVuSans.ttf')
-        df = pd.read_excel(excel_path, dtype=object)  # Orijinal tipleri korumak için object olarak oku
+        
+        if str(excel_path).lower().endswith('.csv'):
+            try:
+                df = pd.read_csv(excel_path, dtype=object)
+                if len(df.columns) == 1:
+                    df_alt = pd.read_csv(excel_path, sep=';', dtype=object)
+                    if len(df_alt.columns) > 1:
+                        df = df_alt
+            except UnicodeDecodeError:
+                df = pd.read_csv(excel_path, dtype=object, encoding='cp1254')
+                if len(df.columns) == 1:
+                    df_alt = pd.read_csv(excel_path, sep=';', dtype=object, encoding='cp1254')
+                    if len(df_alt.columns) > 1:
+                        df = df_alt
+        else:
+            df = pd.read_excel(excel_path, dtype=object)  # Orijinal tipleri korumak için object olarak oku
 
         # Sütun tespiti (Tarih ve Saat kolonlarını bul)
         date_column = None
@@ -267,7 +282,8 @@ class PDFConverterApp:
 
             pdf.ln(row_height * 2)  # Bir sonraki satıra geç
 
-        output_file = f"{output_folder}/{os.path.basename(excel_path).replace('.xlsx', '.pdf')}"
+        base_name = os.path.splitext(os.path.basename(excel_path))[0]
+        output_file = f"{output_folder}/{base_name}.pdf"
         pdf.output(output_file)
 
     def process_file_wrapper(self, excel_path, output_folder, stop_at_blank):
@@ -324,7 +340,10 @@ class PDFConverterApp:
 
     def select_files(self):
         """ Dosyaları seç ve dosya sayısını güncelle """
-        self.files = filedialog.askopenfilenames(title="Excel Dosyalarını Seç", filetypes=[("Excel files", "*.xlsx *.xls")])
+        self.files = filedialog.askopenfilenames(
+            title="Excel veya CSV Dosyalarını Seç", 
+            filetypes=[("Excel ve CSV dosyaları", "*.xlsx *.xls *.csv"), ("Tüm dosyalar", "*.*")]
+        )
         self.file_count_label.config(text=f"Seçilen dosya sayısı: {len(self.files)}")
 
     def start_conversion(self):
