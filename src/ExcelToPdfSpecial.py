@@ -124,18 +124,49 @@ class PDFConverterApp:
         font_path = self.resource_path('assets/DejaVuSans.ttf')
         
         if str(excel_path).lower().endswith('.csv'):
-            try:
-                df = pd.read_csv(excel_path, dtype=object)
-                if len(df.columns) == 1:
-                    df_alt = pd.read_csv(excel_path, sep=';', dtype=object)
-                    if len(df_alt.columns) > 1:
-                        df = df_alt
-            except UnicodeDecodeError:
-                df = pd.read_csv(excel_path, dtype=object, encoding='cp1254')
-                if len(df.columns) == 1:
-                    df_alt = pd.read_csv(excel_path, sep=';', dtype=object, encoding='cp1254')
-                    if len(df_alt.columns) > 1:
-                        df = df_alt
+            import csv
+            import io
+            encodings = ['utf-8', 'cp1254', 'latin1']
+            df = None
+            for enc in encodings:
+                try:
+                    # errors='replace' ve NUL byte temizliği ile okuma
+                    with open(excel_path, 'r', encoding=enc, errors='replace') as f:
+                        content = f.read().replace('\0', '')
+                        
+                    if not content.strip():
+                        df = pd.DataFrame()
+                        break
+                        
+                    sep = ';' if content.count(';') > content.count(',') else ','
+                    reader = csv.reader(io.StringIO(content), delimiter=sep)
+                    data = list(reader)
+                    
+                    if not data:
+                        df = pd.DataFrame()
+                        break
+                    
+                    max_cols = max(len(row) for row in data)
+                    headers = data[0]
+                    # Eğer başlıklar benzersiz değilse veya boşsa, isimlendirme çakışmalarını önleyelim
+                    headers = [str(h) if h else f"Unnamed: {i}" for i, h in enumerate(headers)]
+                    
+                    if len(headers) < max_cols:
+                        headers.extend([f"Unnamed: {i}" for i in range(len(headers), max_cols)])
+                    
+                    # Eksik hücreleri None ile doldur (Pandas için NaN olur)
+                    padded_data = [row + [None]*(max_cols - len(row)) for row in data[1:]]
+                    df = pd.DataFrame(padded_data, columns=headers)
+                    break
+                except Exception:
+                    continue
+            
+            if df is None:
+                # Tüm encoding denemeleri başarısız olursa python engine ile standart yolla devam et
+                try:
+                    df = pd.read_csv(excel_path, dtype=object, engine='python', on_bad_lines='skip', sep=None)
+                except Exception:
+                    df = pd.read_csv(excel_path, dtype=object, engine='python', on_bad_lines='skip', sep=None, encoding='cp1254')
         else:
             df = pd.read_excel(excel_path, dtype=object)  # Orijinal tipleri korumak için object olarak oku
 
@@ -161,26 +192,28 @@ class PDFConverterApp:
         if time_column in df.columns:
             df[time_column] = df[time_column].apply(self.format_time_value)
 
-        # Ondalık sayılarda iki hane koruma ve genel numerik formatlama (tarih/saat hariç)
+        # Ondalık sayılarda 1 hane koruma ve genel numerik formatlama (tarih/saat hariç)
         for col in df.columns:
             if col == date_column or col == time_column:
                 continue
             def format_numeric(val):
                 if pd.isna(val) or val == "":
                     return ""
+                val_str_orig = str(val)
+                val_normalized = val_str_orig.replace(',', '.')
                 try:
-                    val_float = float(val)
-                    if val_float.is_integer():
-                        return str(int(val_float))
-                    # Ondalık basamak 2'den fazlaysa 2 basamağa yuvarla
-                    val_str = str(val)
-                    if '.' in val_str:
-                        dec_part = val_str.split('.')[1]
-                        if len(dec_part) > 2:
-                            return f"{val_float:.2f}"
-                    return val_str
+                    val_float = float(val_normalized)
+                    # Excel'deki görünüm ile eşleşmesi için 1 ondalık basamağa yuvarla
+                    val_rounded = round(val_float, 1)
+                    if val_rounded.is_integer():
+                        return str(int(val_rounded))
+                    
+                    formatted = f"{val_rounded:.1f}"
+                    if ',' in val_str_orig:
+                        return formatted.replace('.', ',')
+                    return formatted.replace('.', ',') # Türkiye/Avrupa standardı için her zaman virgül kullan
                 except (ValueError, TypeError):
-                    return str(val)
+                    return val_str_orig
             df[col] = df[col].apply(format_numeric)
 
         # Target temperature column tespiti (ORTAM1 veya 1. sensör)
@@ -211,7 +244,7 @@ class PDFConverterApp:
             for col in probe_cols:
                 val = df[col].iloc[i]
                 try:
-                    val_float = float(val)
+                    val_float = float(str(val).replace(',', '.'))
                     if val_float < 56.0:
                         all_reached = False
                         break
