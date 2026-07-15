@@ -237,23 +237,24 @@ class PDFConverterApp:
         # Probe (sensör) kolonlarını belirle (Tarih ve Saat kolonları ve isimsiz kolonlar hariç)
         probe_cols = [col for col in df.columns if col != date_column and col != time_column and not str(col).startswith("Unnamed:")]
 
-        # Sadece ve sadece 56 dereceye ulaşan son propun (tüm propların >= 56.0 olduğu ilk satır) satırını bul
-        target_row_idx = None
+        # Hedef hücreleri (her bir prop'un 56'ya ulaştığı ilk hücre) bul
+        highlight_cells = set() # (row_idx, col_name)
+        reached_probes = set()
+
         for i in range(len(df)):
-            all_reached = True
             for col in probe_cols:
-                val = df[col].iloc[i]
-                try:
-                    val_float = float(str(val).replace(',', '.'))
-                    if val_float < 56.0:
-                        all_reached = False
-                        break
-                except (ValueError, TypeError):
-                    all_reached = False
-                    break
-            if all_reached and len(probe_cols) > 0:
-                target_row_idx = i
-                break
+                if col not in reached_probes:
+                    val = df[col].iloc[i]
+                    try:
+                        val_float = float(str(val).replace(',', '.'))
+                        if val_float >= 56.0:
+                            highlight_cells.add((i, col))
+                            reached_probes.add(col)
+                    except (ValueError, TypeError):
+                        pass
+
+        # Tüm propların 56'ya ulaşıp ulaşmadığını kontrol et
+        all_reached = (len(reached_probes) == len(probe_cols)) and len(probe_cols) > 0
 
         # "START OF EXPOSURE" fallback satırını bul
         exposure_row_idx = None
@@ -291,23 +292,25 @@ class PDFConverterApp:
 
         # Veri satırlarını yazdır
         for i in range(len(df)):
-            is_highlighted = False  # Vurgulama flag'i
-
-            # Sadece hedef satırı veya fallback exposure satırını vurgula
-            if target_row_idx is not None:
-                if i == target_row_idx:
-                    is_highlighted = True
-            elif exposure_row_idx is not None:
+            # Sadece tüm proplar 56'ya ulaşmadıysa fallback exposure satırını vurgula
+            is_exposure_row = False
+            if not all_reached and exposure_row_idx is not None:
                 if i == exposure_row_idx:
-                    is_highlighted = True
+                    is_exposure_row = True
 
             for col_idx, item in enumerate(df.columns):
                 value = df[item].iloc[i]
                 if pd.isnull(value):
                     value = ""
 
-                # Eğer satır highlight edilecekse, fill=True ile yazdır (sarı arka plan)
-                if is_highlighted:
+                cell_highlight = False
+                if is_exposure_row:
+                    cell_highlight = True
+                elif (i, item) in highlight_cells:
+                    cell_highlight = True
+
+                # Eğer hücre highlight edilecekse, fill=True ile yazdır (sarı arka plan)
+                if cell_highlight:
                     pdf.set_fill_color(255, 255, 0)
                     pdf.cell(col_widths[col_idx], row_height * 2, str(value), border=0, fill=True)
                 else:
