@@ -15,7 +15,7 @@ This application is customized for heat treatment monitoring, specifically track
 * **Precise Date & Time Normalization**:
   Auto-detects Date and Time columns by header name scans. Converts date fields into clean `d.m.Y` format (e.g., `27.3.2025`) and time fields into `H:M:S.f` with single decimal place precision (e.g., `00:15:54.9`).
 * **Heat Treatment Target Event Highlighting**:
-  Examines all temperature sensor/probe columns (excluding metadata). For each of the 16 probes, it identifies the exact cell where the probe reaches `56°C` for the first time and highlights **ONLY** those specific cells in yellow. Falls back to highlighting rows containing `"START OF EXPOSURE"` if the temperature threshold is not reached for all probes.
+  Examines all temperature sensor/probe columns (excluding metadata). For each of the 16 probes, it identifies the exact cell where the probe reaches `56°C` for the first time and highlights **ONLY** those specific cells in yellow.
 * **Data Integrity Preserved**:
   The application **does not modify the original data** in any way. It is purely designed for verification and marking purposes to control field operations and convert the results into a PDF report.
 * **Fast Concurrent Batch Processing**:

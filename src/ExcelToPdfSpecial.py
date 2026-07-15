@@ -256,13 +256,6 @@ class PDFConverterApp:
         # Tüm propların 56'ya ulaşıp ulaşmadığını kontrol et
         all_reached = (len(reached_probes) == len(probe_cols)) and len(probe_cols) > 0
 
-        # "START OF EXPOSURE" fallback satırını bul
-        exposure_row_idx = None
-        for i in range(len(df)):
-            if any("START OF EXPOSURE" in str(df[item].iloc[i]) for item in df.columns):
-                exposure_row_idx = i
-                break
-
         # Dinamik yönlendirme (Sütun sayısı 8'den fazlaysa Yatay A4)
         orientation = 'L' if df.shape[1] > 8 else 'P'
         pdf = MyFPDF(orientation=orientation)
@@ -292,21 +285,13 @@ class PDFConverterApp:
 
         # Veri satırlarını yazdır
         for i in range(len(df)):
-            # Sadece tüm proplar 56'ya ulaşmadıysa fallback exposure satırını vurgula
-            is_exposure_row = False
-            if not all_reached and exposure_row_idx is not None:
-                if i == exposure_row_idx:
-                    is_exposure_row = True
-
             for col_idx, item in enumerate(df.columns):
                 value = df[item].iloc[i]
                 if pd.isnull(value):
                     value = ""
 
                 cell_highlight = False
-                if is_exposure_row:
-                    cell_highlight = True
-                elif (i, item) in highlight_cells:
+                if (i, item) in highlight_cells:
                     cell_highlight = True
 
                 # Eğer hücre highlight edilecekse, fill=True ile yazdır (sarı arka plan)
